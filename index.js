@@ -16,6 +16,7 @@ console.log('Iniciando WPPConnect...');
 wppconnect
   .create({
     session: 'whatsapp-bot',
+    autoClose: 0, // QR nunca expira
     headless: true, // OBRIGATÓRIO no Heroku
     browserArgs: [
       '--no-sandbox',
