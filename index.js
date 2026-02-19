@@ -4,24 +4,39 @@ const wppconnect = require('@wppconnect-team/wppconnect');
 
 const app = express();
 
+// Segurança: CORS configurado corretamente
 app.use(cors({
-  origin: 'https://snref-fronten-8dbe187fda6c.herokuapp.com'
+  origin: ['https://snref-fronten-8dbe187fda6c.herokuapp.com'],
+  methods: ['GET', 'POST'],
+  allowedHeaders: ['Content-Type']
 }));
 
 app.use(express.json());
 
 let clientInstance = null;
 let isReady = false;
+let isInitializing = false; // Evita múltiplas tentativas de login simultâneas
 
-console.log('Iniciando WPPConnect...');
+console.log('Iniciando sistema de lembretes...');
 
-function iniciarWPP() {
-  wppconnect
-    .create({
+async function iniciarWPP() {
+  if (isInitializing) return;
+  isInitializing = true;
+
+  try {
+    const client = await wppconnect.create({
       session: 'whatsapp-bot',
-      autoClose: 0,
-      killProcessOnBrowserClose: false,
+      catchQR: (base64Qr, asciiQR) => {
+        console.log('--- NOVO QR CODE GERADO ---');
+        console.log(asciiQR); // Exibe no terminal para você escanear via SSH
+      },
+      statusFind: (statusSession, session) => {
+        console.log('Status da Sessão:', statusSession);
+      },
+      autoClose: 60000, // Fecha se não logar em 1 min (evita travar RAM)
       headless: true,
+      useChrome: false, // Força o uso do Chromium instalado via apt
+      // Argumentos críticos para rodar em Linux Server como Root
       browserArgs: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
@@ -30,79 +45,77 @@ function iniciarWPP() {
         '--no-first-run',
         '--no-zygote',
         '--disable-gpu',
-        '--disable-features=IsolateOrigins,site-per-process'
+        '--hide-scrollbars',
+        '--mute-audio',
+        '--single-process' // Economiza RAM em servidores pequenos
       ]
-    })
-    .then((client) => {
-      clientInstance = client;
-      isReady = true;
+    });
 
-      console.log('WPPConnect pronto e sessão ativa!');
+    clientInstance = client;
+    isReady = true;
+    isInitializing = false;
+    console.log('✅ WPPConnect pronto!');
 
-      // 🔄 Reconexão automática
-      client.onStateChange((state) => {
-        console.log('Estado do WhatsApp:', state);
-
-        if (state === 'CONFLICT' || state === 'UNPAIRED' || state === 'UNLAUNCHED') {
-          console.log('⚠️ Estado instável — aplicando forceRefocus()');
-          client.forceRefocus();
-        }
-
-        if (state === 'DISCONNECTED' || state === 'UNPAIRED') {
-          console.log('❌ Sessão perdida — reiniciando WPPConnect...');
-          isReady = false;
-          clientInstance = null;
-          setTimeout(iniciarWPP, 3000);
-        }
-      });
-
-      // 🔥 Captura erros internos
-      client.on('error', (err) => {
-        console.error('Erro no cliente WPP:', err);
+    // 🔄 Monitoramento de estado robusto
+    client.onStateChange((state) => {
+      console.log('> Mudança de estado:', state);
+      if (state === 'DISCONNECTED' || state === 'UNPAIRED') {
         isReady = false;
         clientInstance = null;
-        setTimeout(iniciarWPP, 3000);
-      });
-
-    })
-    .catch((error) => {
-      console.error('Erro ao iniciar WPPConnect:', error);
-      isReady = false;
-      clientInstance = null;
-      setTimeout(iniciarWPP, 5000);
+        console.log('⚠️ Sessão encerrada. Tentando reiniciar em 10s...');
+        setTimeout(iniciarWPP, 10000);
+      }
     });
+
+  } catch (error) {
+    console.error('❌ Erro fatal na inicialização:', error.message);
+    isReady = false;
+    isInitializing = false;
+    clientInstance = null;
+    // Tenta reiniciar após 15 segundos se falhar
+    setTimeout(iniciarWPP, 15000);
+  }
 }
 
-// Iniciar WPPConnect
+// Inicializa o bot
 iniciarWPP();
 
-// API
+// --- ROTAS API ---
+
 app.get('/status', (req, res) => {
-  res.json({ status: isReady ? 'ready' : 'not_ready' });
+  res.json({ 
+    status: isReady ? 'ready' : 'initializing',
+    connected: !!clientInstance 
+  });
 });
 
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
 
+  if (!number || !message) {
+    return res.status(400).json({ error: 'Número e mensagem são obrigatórios' });
+  }
+
   if (!isReady || !clientInstance) {
-    return res.status(503).json({ error: 'Bot não está pronto (sessão não ativa)' });
+    return res.status(503).json({ error: 'O bot ainda está carregando ou desconectado' });
   }
 
   try {
-    const jid = `${number}@c.us`;
-    console.log(`📨 Enviando mensagem para ${jid}: ${message}`);
+    // Limpeza básica do número (remove caracteres não numéricos)
+    const cleanNumber = number.replace(/\D/g, '');
+    const jid = `${cleanNumber}@c.us`;
 
+    console.log(`📨 Enviando para ${jid}...`);
     await clientInstance.sendText(jid, message);
 
-    res.json({ success: true, message: 'Mensagem enviada com sucesso' });
+    return res.json({ success: true, target: jid });
   } catch (e) {
-    console.error('Erro ao enviar mensagem:', e);
-    res.status(500).json({ error: 'Erro ao enviar: ' + e.message });
+    console.error('❌ Falha ao enviar:', e);
+    return res.status(500).json({ error: 'Erro interno no WhatsApp', detail: e.message });
   }
 });
 
-// Iniciar API
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`API rodando na porta ${PORT}`);
+  console.log(`🚀 API de Lembretes ativa na porta ${PORT}`);
 });
