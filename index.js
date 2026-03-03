@@ -83,9 +83,9 @@ iniciarWPP();
 // --- ROTAS API ---
 
 app.get('/status', (req, res) => {
-  res.json({ 
+  res.json({
     status: isReady ? 'ready' : 'initializing',
-    connected: !!clientInstance 
+    connected: !!clientInstance
   });
 });
 
@@ -101,17 +101,25 @@ app.post('/send-message', async (req, res) => {
   }
 
   try {
-    // Limpeza básica do número (remove caracteres não numéricos)
-    const cleanNumber = number.replace(/\D/g, '');
+    let cleanNumber = number.replace(/\D/g, '');
     const jid = `${cleanNumber}@c.us`;
 
-    console.log(`📨 Enviando para ${jid}...`);
-    await clientInstance.sendText(jid, message);
+    console.log(`📨 Validando e enviando para ${jid}...`);
 
-    return res.json({ success: true, target: jid });
+    // ESTA É A CORREÇÃO PARA O ERRO DE LID:
+    const check = await clientInstance.checkNumberStatus(jid);
+
+    if (!check.canReceiveMessage) {
+      return res.status(404).json({ error: 'Este número não pode receber mensagens.' });
+    }
+
+    // Envia para o ID exato retornado pelo WhatsApp (que já vem com o LID correto)
+    await clientInstance.sendText(check.id._serialized, message);
+
+    return res.json({ success: true, target: check.id._serialized });
   } catch (e) {
     console.error('❌ Falha ao enviar:', e);
-    return res.status(500).json({ error: 'Erro interno no WhatsApp', detail: e.message });
+    return res.status(500).json({ error: 'Erro interno', detail: e.message });
   }
 });
 
