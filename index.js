@@ -68,39 +68,26 @@ iniciarWPP();
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
 
-  if (!isReady || !clientInstance) return res.status(503).json({ error: 'Bot não pronto' });
+  if (!isReady || !clientInstance) {
+    return res.status(503).json({ error: 'Bot não pronto' });
+  }
 
   try {
-    // Definimos o alvo. Se for o seu número, usamos o LID direto que funcionou no log anterior
     const cleanNumber = String(number).replace(/\D/g, '');
-    const target = cleanNumber === "351920124925" ? "77919313481733@lid" : `${cleanNumber}@c.us`;
+    const target = `${cleanNumber}@c.us`;
 
-    console.log(`🚀 Injetando comando para: ${target}`);
+    console.log(`🚀 Enviando mensagem para: ${target}`);
 
-    // Injeção com verificação de objeto WPP
-    const result = await clientInstance.page.evaluate(async ({ to, content }) => {
-      if (typeof WPP === 'undefined') throw new Error('Objeto WPP ainda não carregado no browser');
-      
-      // Garante que o chat esteja pronto antes de enviar
-      await WPP.chat.find(to); 
-      return await WPP.chat.sendTextMessage(to, content);
-    }, { to: target, content: String(message) });
+    const result = await clientInstance.sendText(target, String(message));
 
-    console.log('✅ Sucesso na injeção!');
+    console.log('✅ Mensagem enviada!');
     return res.json({ success: true, id: result.id });
 
   } catch (e) {
-    console.error('❌ Falha na injeção:', e.message);
-    
-    // Fallback de emergência usando o método padrão da biblioteca, caso a injeção falhe por sintaxe
-    try {
-      console.log('🔄 Tentando método padrão como último recurso...');
-      const retry = await clientInstance.sendText("77919313481733@lid", String(message));
-      return res.json({ success: true, retry: true, id: retry.id });
-    } catch (err2) {
-      return res.status(500).json({ error: 'Erro persistente', detail: e.message });
-    }
+    console.error('❌ Erro ao enviar mensagem:', e.message);
+    return res.status(500).json({ error: 'Erro ao enviar mensagem', detail: e.message });
   }
 });
+
 
 app.listen(3000, () => console.log(`🚀 API em http://localhost:3000`));
