@@ -95,50 +95,47 @@ app.get('/status', (req, res) => {
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
 
-  if (!number || !message) {
-    return res.status(400).json({ error: 'Número e mensagem são obrigatórios' });
-  }
-
   if (!isReady || !clientInstance) {
-    return res.status(503).json({ error: 'Servidor WhatsApp ainda não está pronto' });
+    return res.status(503).json({ error: 'Servidor não pronto' });
   }
 
   try {
-    // CORREÇÃO DEFINITIVA DO WID:
-    // 1. Converte para string e remove TUDO que não for número
-    const cleanNumber = String(number).replace(/\D/g, '');
+    // 1. Limpeza total
+    let cleanNumber = String(number).replace(/\D/g, '');
     
-    // 2. Monta o JID final estritamente como string
-    const jid = `${cleanNumber}@c.us`;
+    // 2. LÓGICA DE DETECÇÃO DE LID/JID
+    // Se o número for muito longo (comum em LIDs), o WPPConnect às vezes falha.
+    // Vamos tentar o envio usando a string pura.
+    const jid = cleanNumber.includes('@') ? cleanNumber : `${cleanNumber}@c.us`;
 
-    console.log(`📨 Tentando envio para JID: ${jid}`);
+    console.log(`📨 Tentando envio para: ${jid}`);
 
-    // 3. Envia usando o método mais direto possível
-    // Forçamos a mensagem a ser string também para evitar conflitos
-    const result = await clientInstance.sendText(jid, String(message));
-
-    console.log('✅ Mensagem enviada com sucesso!');
+    // 3. USO DO MÉTODO INTERNO PARA GARANTIR COMPATIBILIDADE
+    const result = await clientInstance.sendText(jid, String(message), {
+        waitForAck: true,
+        isGroup: false
+    });
 
     return res.json({ 
         success: true, 
-        messageId: result.id,
-        target: jid 
+        messageId: result.id 
     });
 
   } catch (e) {
-    // Se o erro ainda for o de WID, vamos logar o objeto de erro inteiro para depurar
-    console.error('❌ Erro detalhado no envio:', e);
+    console.error('❌ Erro no envio:', e);
     
-    if (e.message && (e.message.includes('Session closed') || e.message.includes('Protocol error'))) {
-        isReady = false;
-        clientInstance = null;
-        iniciarWPP();
+    // TRATAMENTO PARA NÚMEROS COM LID (Caso o erro persista)
+    if (e.code === 'invalid_wid' && e.id) {
+        try {
+            console.log(`🔄 Tentando fallback para LID detectado: ${e.id.id}`);
+            const retry = await clientInstance.sendText(e.id.id, String(message));
+            return res.json({ success: true, messageId: retry.id, note: 'sent_via_lid' });
+        } catch (retryErr) {
+            return res.status(500).json({ error: 'Erro no fallback LID', detail: retryErr.message });
+        }
     }
 
-    return res.status(500).json({ 
-      error: 'Erro ao enviar mensagem', 
-      detail: e.message || e 
-    });
+    return res.status(500).json({ error: 'Erro ao enviar', detail: e.message || e });
   }
 });
 
