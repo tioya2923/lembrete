@@ -17,7 +17,7 @@ let clientInstance = null;
 let isReady = false;
 let isInitializing = false;
 
-console.log('--- Iniciando sistema de lembretes (WPPConnect) ---');
+console.log('--- Iniciando sistema de lembretes (WPPConnect v24.04) ---');
 
 async function iniciarWPP() {
   if (isInitializing) return;
@@ -35,21 +35,25 @@ async function iniciarWPP() {
         console.log('Status da Sessão:', statusSession);
       },
       headfull: false,
-      autoClose: 0, // Mantém aberto para evitar fechar a sessão por inatividade
-      tokenStore: 'file', // Salva a sessão localmente em pasta
+      autoClose: 0, 
+      tokenStore: 'file', 
       folderNameToken: 'tokens',
-      browserArgs: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--hide-scrollbars',
-        '--mute-audio'
-        // REMOVIDO: --single-process (causa instabilidade e crash de sessão)
-      ]
+      // CONFIGURAÇÕES CRÍTICAS PARA LINUX/ARM/SNAP
+      puppeteerOptions: {
+        executablePath: '/usr/bin/chromium-browser', // Caminho padrão do Snap no Ubuntu
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--hide-scrollbars',
+          '--mute-audio',
+          '--single-process' // Necessário em instâncias com pouca RAM para evitar crashes
+        ],
+      }
     });
 
     clientInstance = client;
@@ -73,6 +77,7 @@ async function iniciarWPP() {
     isReady = false;
     isInitializing = false;
     clientInstance = null;
+    // Se falhar, tenta reiniciar em 20 segundos
     setTimeout(iniciarWPP, 20000);
   }
 }
@@ -112,12 +117,10 @@ app.post('/send-message', async (req, res) => {
     const check = await clientInstance.checkNumberStatus(jid);
 
     if (!check || !check.canReceiveMessage) {
-        // Fallback: se o check falhar mas o número parecer válido, tenta enviar direto
-        // ou retorna erro se tiveres a certeza que o número é inválido
         return res.status(404).json({ error: 'Número inválido ou sem WhatsApp' });
     }
 
-    // Envio da mensagem usando o ID formatado corretamente pelo WhatsApp
+    // Envio da mensagem
     const result = await clientInstance.sendText(check.id._serialized, message);
 
     return res.json({ 
@@ -129,8 +132,9 @@ app.post('/send-message', async (req, res) => {
   } catch (e) {
     console.error('❌ Erro no envio:', e.message);
     
-    // Se o erro for de sessão fechada durante o envio, forçamos o restart
-    if (e.message.includes('Session closed')) {
+    // TRATAMENTO DO ERRO "SESSION CLOSED"
+    if (e.message.includes('Session closed') || e.message.includes('Protocol error')) {
+        console.log('🚨 Sessão do browser fechada. Reiniciando instância...');
         isReady = false;
         clientInstance = null;
         iniciarWPP();
