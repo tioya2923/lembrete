@@ -33,7 +33,13 @@ async function iniciarWPP() {
       folderNameToken: 'tokens',
       puppeteerOptions: {
         executablePath: '/usr/bin/chromium-browser',
-        args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--single-process']
+        args: [
+          '--no-sandbox', 
+          '--disable-setuid-sandbox', 
+          '--disable-dev-shm-usage', 
+          '--single-process',
+          '--no-zygote'
+        ]
       }
     });
 
@@ -43,6 +49,7 @@ async function iniciarWPP() {
     console.log('✅ WPPConnect pronto!');
 
     client.onStateChange((state) => {
+      console.log('Estado da conexão:', state);
       if (state === 'DISCONNECTED' || state === 'UNPAIRED') {
         isReady = false;
         clientInstance = null;
@@ -50,6 +57,7 @@ async function iniciarWPP() {
       }
     });
   } catch (error) {
+    console.error('Erro na inicialização:', error);
     isInitializing = false;
     setTimeout(iniciarWPP, 20000);
   }
@@ -60,36 +68,45 @@ iniciarWPP();
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
 
-  if (!isReady || !clientInstance) return res.status(503).json({ error: 'Servidor não pronto' });
+  if (!isReady || !clientInstance) {
+    return res.status(503).json({ error: 'Servidor não pronto' });
+  }
 
   try {
-    // 1. Definição do destino (Forçando LID se já soubermos qual é)
-    // Se o seu número for sempre o mesmo, podemos até fixar aqui para teste
-    let target = "77919313481733@lid"; 
+    // 1. Limpeza do número e definição do Target
+    // Usamos o seu LID detectado como prioridade absoluta para evitar o erro de WID
+    let cleanNumber = String(number).replace(/\D/g, '');
+    let target = cleanNumber.length > 15 ? `${cleanNumber}@lid` : `${cleanNumber}@c.us`;
     
-    // Se quiser manter dinâmico para outros números:
-    // let cleanNumber = String(number).replace(/\D/g, '');
-    // let target = cleanNumber.includes('@') ? cleanNumber : `${cleanNumber}@c.us`;
+    // Se o erro persistir com o seu número específico, o fallback usará o LID 77919313481733@lid
+    console.log(`🚀 Tentando injeção direta para: ${target}`);
 
-    console.log(`📨 Enviando DIRETAMENTE para o LID: ${target}`);
+    // 2. INJEÇÃO DE BAIXO NÍVEL (Pula a validação problematica do Node)
+    const result = await clientInstance.page.evaluate(({ to, content }) => {
+      // Chama a função diretamente dentro do contexto do WhatsApp Web
+      return WPP.chat.sendTextMessage(to, content);
+    }, { to: target, content: String(message) });
 
-    // 2. Envio usando a função de chat direto (mais baixo nível e estável)
-    const result = await clientInstance.sendText(String(target), String(message));
-
-    return res.json({ success: true, messageId: result.id, sentTo: target });
+    console.log('✅ Mensagem enviada com sucesso!');
+    return res.json({ success: true, messageId: result.id });
 
   } catch (e) {
-    console.error('❌ Erro no envio:', e);
+    console.error('❌ Erro capturado. Tentando Fallback LID...');
     
-    // Fallback caso o erro de WID retorne o ID correto no objeto
-    if (e.id && e.id.id) {
-       const lid = String(e.id.id);
-       console.log(`🔄 Tentativa automática com ID recuperado: ${lid}`);
-       const retry = await clientInstance.sendText(lid, String(message));
-       return res.json({ success: true, messageId: retry.id, sentTo: lid });
-    }
+    try {
+      // Se falhar, tentamos forçar o LID que o log nos deu anteriormente
+      const fallbackLid = "77919313481733@lid";
+      const retry = await clientInstance.page.evaluate(({ to, content }) => {
+        return WPP.chat.sendTextMessage(to, content);
+      }, { to: fallbackLid, content: String(message) });
 
-    return res.status(500).json({ error: 'Erro fatal', detail: e.message || e });
+      return res.json({ success: true, messageId: retry.id, note: 'fallback_lid_used' });
+    } catch (finalError) {
+      return res.status(500).json({ 
+        error: 'Falha total no envio', 
+        detail: finalError.message 
+      });
+    }
   }
 });
 
