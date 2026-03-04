@@ -40,7 +40,7 @@ async function iniciarWPP() {
       folderNameToken: 'tokens',
       // CONFIGURAÇÕES CRÍTICAS PARA LINUX/ARM/SNAP
       puppeteerOptions: {
-        executablePath: '/usr/bin/chromium-browser', // Caminho padrão do Snap no Ubuntu
+        //executablePath: '/usr/bin/chromium-browser', // Caminho padrão do Snap no Ubuntu
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
