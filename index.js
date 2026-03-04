@@ -35,7 +35,7 @@ async function iniciarWPP() {
         console.log('Status da Sessão:', statusSession);
       },
       headfull: false,
-      autoClose: false, // Alterado para false para maior estabilidade
+      autoClose: false,
       tokenStore: 'file', 
       folderNameToken: 'tokens',
       puppeteerOptions: {
@@ -61,7 +61,6 @@ async function iniciarWPP() {
     isInitializing = false;
     console.log('✅ WPPConnect pronto e autenticado!');
 
-    // Monitoramento de estado para auto-recovery
     client.onStateChange((state) => {
       console.log('> Estado atual:', state);
       if (state === 'DISCONNECTED' || state === 'UNPAIRED') {
@@ -81,7 +80,6 @@ async function iniciarWPP() {
   }
 }
 
-// Inicializa o bot
 iniciarWPP();
 
 // --- ROTAS API ---
@@ -106,17 +104,20 @@ app.post('/send-message', async (req, res) => {
   }
 
   try {
-    // 1. Limpeza rigorosa do número
-    let cleanNumber = number.replace(/\D/g, '');
+    // CORREÇÃO DEFINITIVA DO WID:
+    // 1. Converte para string e remove TUDO que não for número
+    const cleanNumber = String(number).replace(/\D/g, '');
     
-    // 2. Formata o JID corretamente (ex: 351920124925@c.us)
-    const jid = cleanNumber.includes('@c.us') ? cleanNumber : `${cleanNumber}@c.us`;
+    // 2. Monta o JID final estritamente como string
+    const jid = `${cleanNumber}@c.us`;
 
-    console.log(`📨 Enviando mensagem para: ${jid}`);
+    console.log(`📨 Tentando envio para JID: ${jid}`);
 
-    // 3. Envio direto usando o JID (Evita o erro de [object Object])
-    // O WPPConnect valida o número internamente ao enviar
-    const result = await clientInstance.sendText(jid, message);
+    // 3. Envia usando o método mais direto possível
+    // Forçamos a mensagem a ser string também para evitar conflitos
+    const result = await clientInstance.sendText(jid, String(message));
+
+    console.log('✅ Mensagem enviada com sucesso!');
 
     return res.json({ 
         success: true, 
@@ -125,16 +126,19 @@ app.post('/send-message', async (req, res) => {
     });
 
   } catch (e) {
-    console.error('❌ Erro no envio:', e.message);
+    // Se o erro ainda for o de WID, vamos logar o objeto de erro inteiro para depurar
+    console.error('❌ Erro detalhado no envio:', e);
     
-    // Tratamento de sessão fechada
-    if (e.message.includes('Session closed') || e.message.includes('Protocol error')) {
+    if (e.message && (e.message.includes('Session closed') || e.message.includes('Protocol error'))) {
         isReady = false;
         clientInstance = null;
         iniciarWPP();
     }
 
-    return res.status(500).json({ error: 'Erro ao enviar mensagem', detail: e.message });
+    return res.status(500).json({ 
+      error: 'Erro ao enviar mensagem', 
+      detail: e.message || e 
+    });
   }
 });
 
