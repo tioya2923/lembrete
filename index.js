@@ -17,7 +17,7 @@ let clientInstance = null;
 let isReady = false;
 let isInitializing = false;
 
-console.log('--- Iniciando sistema de lembretes (WPPConnect v24.04) ---');
+console.log('--- Iniciando sistema de lembretes (WPPConnect v24.04 ARM) ---');
 
 async function iniciarWPP() {
   if (isInitializing) return;
@@ -35,12 +35,11 @@ async function iniciarWPP() {
         console.log('Status da Sessão:', statusSession);
       },
       headfull: false,
-      autoClose: 0, 
+      autoClose: false, // Alterado para false para maior estabilidade
       tokenStore: 'file', 
       folderNameToken: 'tokens',
-      // CONFIGURAÇÕES CRÍTICAS PARA LINUX/ARM/SNAP
       puppeteerOptions: {
-        executablePath: '/usr/bin/chromium-browser', // Caminho padrão do Snap no Ubuntu
+        executablePath: '/usr/bin/chromium-browser',
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -51,8 +50,8 @@ async function iniciarWPP() {
           '--disable-gpu',
           '--hide-scrollbars',
           '--mute-audio',
-          '--single-process', // Necessário em instâncias com pouca RAM para evitar crashes
-          '--disable-features=IsolateOrigins,site-per-process' // Crucial para ARM64
+          '--single-process',
+          '--disable-features=IsolateOrigins,site-per-process'
         ],
       }
     });
@@ -78,7 +77,6 @@ async function iniciarWPP() {
     isReady = false;
     isInitializing = false;
     clientInstance = null;
-    // Se falhar, tenta reiniciar em 20 segundos
     setTimeout(iniciarWPP, 20000);
   }
 }
@@ -108,34 +106,29 @@ app.post('/send-message', async (req, res) => {
   }
 
   try {
-    // Limpeza do número
+    // 1. Limpeza rigorosa do número
     let cleanNumber = number.replace(/\D/g, '');
-    const jid = cleanNumber.includes('@') ? cleanNumber : `${cleanNumber}@c.us`;
+    
+    // 2. Formata o JID corretamente (ex: 351920124925@c.us)
+    const jid = cleanNumber.includes('@c.us') ? cleanNumber : `${cleanNumber}@c.us`;
 
-    console.log(`📨 Enviando para: ${jid}`);
+    console.log(`📨 Enviando mensagem para: ${jid}`);
 
-    // Validação de número (LID/ID check)
-    const check = await clientInstance.checkNumberStatus(jid);
-
-    if (!check || !check.canReceiveMessage) {
-        return res.status(404).json({ error: 'Número inválido ou sem WhatsApp' });
-    }
-
-    // Envio da mensagem
-    const result = await clientInstance.sendText(check.id._serialized, message);
+    // 3. Envio direto usando o JID (Evita o erro de [object Object])
+    // O WPPConnect valida o número internamente ao enviar
+    const result = await clientInstance.sendText(jid, message);
 
     return res.json({ 
         success: true, 
         messageId: result.id,
-        target: check.id._serialized 
+        target: jid 
     });
 
   } catch (e) {
     console.error('❌ Erro no envio:', e.message);
     
-    // TRATAMENTO DO ERRO "SESSION CLOSED"
+    // Tratamento de sessão fechada
     if (e.message.includes('Session closed') || e.message.includes('Protocol error')) {
-        console.log('🚨 Sessão do browser fechada. Reiniciando instância...');
         isReady = false;
         clientInstance = null;
         iniciarWPP();
