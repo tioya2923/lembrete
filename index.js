@@ -63,37 +63,33 @@ app.post('/send-message', async (req, res) => {
   if (!isReady || !clientInstance) return res.status(503).json({ error: 'Servidor não pronto' });
 
   try {
-    let cleanNumber = String(number).replace(/\D/g, '');
-    let jid = cleanNumber.includes('@') ? cleanNumber : `${cleanNumber}@c.us`;
+    // 1. Definição do destino (Forçando LID se já soubermos qual é)
+    // Se o seu número for sempre o mesmo, podemos até fixar aqui para teste
+    let target = "77919313481733@lid"; 
+    
+    // Se quiser manter dinâmico para outros números:
+    // let cleanNumber = String(number).replace(/\D/g, '');
+    // let target = cleanNumber.includes('@') ? cleanNumber : `${cleanNumber}@c.us`;
 
-    console.log(`📨 Validando e enviando para: ${jid}`);
+    console.log(`📨 Enviando DIRETAMENTE para o LID: ${target}`);
 
-    // Passo 1: Validar o número e obter o ID real (seja @c.us ou @lid)
-    const profile = await clientInstance.checkNumberStatus(jid);
-    const targetId = profile.id._serialized; 
+    // 2. Envio usando a função de chat direto (mais baixo nível e estável)
+    const result = await clientInstance.sendText(String(target), String(message));
 
-    console.log(`🎯 ID Real Detectado: ${targetId}`);
-
-    // Passo 2: Enviar para o ID real retornado pelo WhatsApp
-    const result = await clientInstance.sendText(targetId, String(message));
-
-    return res.json({ success: true, messageId: result.id });
+    return res.json({ success: true, messageId: result.id, sentTo: target });
 
   } catch (e) {
-    console.error('❌ Erro no envio:', e.message);
-
-    // Fallback de emergência caso o checkNumberStatus falhe mas tenhamos o ID do erro
+    console.error('❌ Erro no envio:', e);
+    
+    // Fallback caso o erro de WID retorne o ID correto no objeto
     if (e.id && e.id.id) {
-       try {
-           console.log(`🔄 Fallback final para: ${e.id.id}`);
-           const retry = await clientInstance.sendText(e.id.id, String(message));
-           return res.json({ success: true, messageId: retry.id });
-       } catch (innerE) {
-           return res.status(500).json({ error: 'Falha total', detail: innerE.message });
-       }
+       const lid = String(e.id.id);
+       console.log(`🔄 Tentativa automática com ID recuperado: ${lid}`);
+       const retry = await clientInstance.sendText(lid, String(message));
+       return res.json({ success: true, messageId: retry.id, sentTo: lid });
     }
 
-    return res.status(500).json({ error: 'Erro ao enviar', detail: e.message });
+    return res.status(500).json({ error: 'Erro fatal', detail: e.message || e });
   }
 });
 
