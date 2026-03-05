@@ -88,12 +88,6 @@ async function iniciarWPP() {
       }
     });
 
-    client.onLogout(() => {
-      console.log('Logout detectado. Reiniciando...');
-      isReady = false;
-      clientInstance = null;
-      setTimeout(iniciarWPP, 15000);
-    });
 
     // Detecta fechamento do navegador
     if (client && client.page && client.page.browser) {
