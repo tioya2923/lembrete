@@ -12,13 +12,20 @@ app.use(cors({
 
 app.use(express.json());
 
+
 let clientInstance = null;
 let isReady = false;
 let isInitializing = false;
+let browserClosed = false;
+let lastInit = 0;
+
 
 async function iniciarWPP() {
   if (isInitializing) return;
+  if (Date.now() - lastInit < 10000) return; // evita loops rápidos
   isInitializing = true;
+  lastInit = Date.now();
+  browserClosed = false;
 
   try {
     const client = await wppconnect.create({
@@ -34,9 +41,9 @@ async function iniciarWPP() {
       puppeteerOptions: {
         executablePath: '/usr/bin/chromium-browser',
         args: [
-          '--no-sandbox', 
-          '--disable-setuid-sandbox', 
-          '--disable-dev-shm-usage', 
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
           '--single-process',
           '--no-zygote'
         ]
@@ -48,16 +55,55 @@ async function iniciarWPP() {
     isInitializing = false;
     console.log('✅ WPPConnect pronto!');
 
+    // Reconexão automática em eventos críticos
     client.onStateChange((state) => {
       console.log('Estado da conexão:', state);
-      if (state === 'DISCONNECTED' || state === 'UNPAIRED') {
+      if (state === 'DISCONNECTED' || state === 'UNPAIRED' || state === 'CLOSED') {
         isReady = false;
         clientInstance = null;
         setTimeout(iniciarWPP, 15000);
       }
     });
+
+    client.onStreamChange((state) => {
+      console.log('Stream alterado:', state);
+      if (state === 'DISCONNECTED' || state === 'SYNCING') {
+        isReady = false;
+        clientInstance = null;
+        setTimeout(iniciarWPP, 15000);
+      }
+    });
+
+    client.onLogout(() => {
+      console.log('Logout detectado. Reiniciando...');
+      isReady = false;
+      clientInstance = null;
+      setTimeout(iniciarWPP, 15000);
+    });
+
+    // Detecta fechamento do navegador
+    if (client && client.page && client.page.browser) {
+      client.page.browser().on('disconnected', () => {
+        console.error('Navegador fechado! Reiniciando bot...');
+        browserClosed = true;
+        isReady = false;
+        clientInstance = null;
+        setTimeout(iniciarWPP, 15000);
+      });
+    }
+
+    // Captura erros não tratados
+    process.on('unhandledRejection', (reason, p) => {
+      console.error('Unhandled Rejection:', reason);
+    });
+    process.on('uncaughtException', (err) => {
+      console.error('Uncaught Exception:', err);
+    });
+
   } catch (error) {
     console.error('Erro na inicialização:', error);
+    isReady = false;
+    clientInstance = null;
     isInitializing = false;
     setTimeout(iniciarWPP, 20000);
   }
@@ -65,11 +111,12 @@ async function iniciarWPP() {
 
 iniciarWPP();
 
+
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
 
-  if (!isReady || !clientInstance) {
-    return res.status(503).json({ error: 'Bot não pronto' });
+  if (!isReady || !clientInstance || browserClosed) {
+    return res.status(503).json({ error: 'Bot não pronto ou sessão fechada' });
   }
 
   try {
@@ -78,12 +125,26 @@ app.post('/send-message', async (req, res) => {
 
     console.log(`🚀 Enviando mensagem para: ${target}`);
 
+    // Verifica se a sessão está ativa antes de enviar
+    if (typeof clientInstance.getConnectionState === 'function') {
+      const state = await clientInstance.getConnectionState();
+      if (state !== 'CONNECTED') {
+        throw new Error('Sessão não está conectada');
+      }
+    }
+
     const result = await clientInstance.sendText(target, String(message));
 
     console.log('✅ Mensagem enviada!');
     return res.json({ success: true, id: result.id });
 
   } catch (e) {
+    // Se for erro de sessão fechada, reinicia o bot
+    if (e.message && e.message.includes('Session closed')) {
+      isReady = false;
+      clientInstance = null;
+      setTimeout(iniciarWPP, 5000);
+    }
     console.error('❌ Erro ao enviar mensagem:', e.message);
     return res.status(500).json({ error: 'Erro ao enviar mensagem', detail: e.message });
   }
