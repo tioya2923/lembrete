@@ -49,7 +49,7 @@ async function iniciarWPP() {
       },
       statusFind: (statusSession) => console.log('Status da Sessão:', statusSession),
       headfull: false,
-      autoClose: false,
+      autoClose: 600, // 10 minutos para escanear o QR
       tokenStore: 'file',
       folderNameToken: 'tokens',
       puppeteerOptions: {
@@ -72,7 +72,7 @@ async function iniciarWPP() {
     // Reconexão automática em eventos críticos
     client.onStateChange((state) => {
       console.log('Estado da conexão:', state);
-      if (state === 'DISCONNECTED' || state === 'UNPAIRED' || state === 'CLOSED') {
+      if (state === 'DISCONNECTED' || state === 'UNPAIRED' || state === 'CLOSED' || state === 'CONFLICT' || state === 'UNLAUNCHED') {
         isReady = false;
         clientInstance = null;
         setTimeout(iniciarWPP, 15000);
@@ -87,7 +87,6 @@ async function iniciarWPP() {
         setTimeout(iniciarWPP, 15000);
       }
     });
-
 
     // Detecta fechamento do navegador
     if (client && client.page && client.page.browser) {
