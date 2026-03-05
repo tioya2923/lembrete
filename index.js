@@ -1,6 +1,20 @@
+
 const express = require('express');
 const cors = require('cors');
 const wppconnect = require('@wppconnect-team/wppconnect');
+const fs = require('fs');
+const path = require('path');
+
+// Remover arquivo de lock do Chrome/Puppeteer
+const singletonLockPath = path.join(__dirname, 'tokens', 'whatsapp-bot', 'SingletonLock');
+try {
+  if (fs.existsSync(singletonLockPath)) {
+    fs.unlinkSync(singletonLockPath);
+    console.log('Arquivo SingletonLock removido automaticamente.');
+  }
+} catch (e) {
+  console.error('Erro ao remover SingletonLock:', e.message);
+}
 
 const app = express();
 
