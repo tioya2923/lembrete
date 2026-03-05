@@ -49,7 +49,7 @@ async function iniciarWPP() {
       },
       statusFind: (statusSession) => console.log('Status da Sessão:', statusSession),
       headfull: false,
-        autoClose: 0, // QR permanece aberto até autenticação
+        autoClose: 360, // QR permanece aberto por 6 minutos
       tokenStore: 'file',
       folderNameToken: 'tokens',
       puppeteerOptions: {
