@@ -5,15 +5,37 @@ const wppconnect = require('@wppconnect-team/wppconnect');
 const fs = require('fs');
 const path = require('path');
 
-// Remover arquivo de lock do Chrome/Puppeteer
-const singletonLockPath = path.join(__dirname, 'tokens', 'whatsapp-bot', 'SingletonLock');
-try {
-  if (fs.existsSync(singletonLockPath)) {
-    fs.unlinkSync(singletonLockPath);
-    console.log('Arquivo SingletonLock removido automaticamente.');
+// Remover arquivos de lock e tentar matar processos Chromium/Puppeteer
+const lockFiles = [
+  'SingletonLock',
+  'DevToolsActivePort',
+  'lockfile',
+  'LOCK'
+];
+const lockDir = path.join(__dirname, 'tokens', 'whatsapp-bot');
+lockFiles.forEach((file) => {
+  const filePath = path.join(lockDir, file);
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`Arquivo ${file} removido automaticamente.`);
+    }
+  } catch (e) {
+    console.error(`Erro ao remover ${file}:`, e.message);
   }
-} catch (e) {
-  console.error('Erro ao remover SingletonLock:', e.message);
+});
+
+// Tentar matar processos Chromium/Puppeteer (Linux)
+if (process.platform === 'linux') {
+  const { exec } = require('child_process');
+  exec('pkill -f chromium || pkill -f puppeteer || true', (err, stdout, stderr) => {
+    if (err) {
+      console.error('Erro ao tentar matar processos Chromium/Puppeteer:', err.message);
+    } else {
+      if (stdout) console.log('Processos Chromium/Puppeteer finalizados:', stdout);
+      if (stderr) console.log('Saída stderr:', stderr);
+    }
+  });
 }
 
 const app = express();
