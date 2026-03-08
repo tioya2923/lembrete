@@ -55,6 +55,27 @@ let isInitializing = false;
 let browserClosed = false;
 let lastInit = 0;
 
+// Handler para finalizar o clientInstance ao encerrar o processo
+async function closeClientInstance() {
+  if (clientInstance && typeof clientInstance.close === 'function') {
+    try {
+      await clientInstance.close();
+      console.log('✅ ClientInstance fechado corretamente.');
+    } catch (e) {
+      console.error('Erro ao fechar clientInstance:', e.message);
+    }
+  }
+}
+
+process.on('SIGINT', async () => {
+  await closeClientInstance();
+  process.exit();
+});
+process.on('SIGTERM', async () => {
+  await closeClientInstance();
+  process.exit();
+});
+
 
 async function iniciarWPP() {
   if (isInitializing) return;
