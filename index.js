@@ -1,211 +1,153 @@
-
 const express = require('express');
 const cors = require('cors');
 const wppconnect = require('@wppconnect-team/wppconnect');
 const fs = require('fs');
 const path = require('path');
-
-// Remover arquivos de lock e tentar matar processos Chromium/Puppeteer
-const lockFiles = [
-  'SingletonLock',
-  'DevToolsActivePort',
-  'lockfile',
-  'LOCK'
-];
-const lockDir = path.join(__dirname, 'tokens', 'whatsapp-bot');
-lockFiles.forEach((file) => {
-  const filePath = path.join(lockDir, file);
-  try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      console.log(`Arquivo ${file} removido automaticamente.`);
-    }
-  } catch (e) {
-    console.error(`Erro ao remover ${file}:`, e.message);
-  }
-});
-
-// Tentar matar processos Chromium/Puppeteer (Linux)
-if (process.platform === 'linux') {
-  const { exec } = require('child_process');
-  exec('pkill -f chromium || pkill -f puppeteer || true', (err, stdout, stderr) => {
-    if (err) {
-      console.error('Erro ao tentar matar processos Chromium/Puppeteer:', err.message);
-    } else {
-      if (stdout) console.log('Processos Chromium/Puppeteer finalizados:', stdout);
-      if (stderr) console.log('Saída stderr:', stderr);
-    }
-  });
-}
+const { exec } = require('child_process');
 
 const app = express();
+const PORT = 3000;
 
+// Configurações de Caminhos
+const tokensDir = path.join(__dirname, 'tokens');
+const sessionName = 'whatsapp-bot';
+
+// --- FUNÇÃO DE LIMPEZA DE AMBIENTE ---
+function limparAmbiente() {
+  console.log('🧹 Limpando arquivos de trava e processos antigos...');
+  
+  const lockFiles = ['SingletonLock', 'DevToolsActivePort', 'lockfile', 'LOCK'];
+  const sessionPath = path.join(tokensDir, sessionName);
+
+  if (fs.existsSync(sessionPath)) {
+    lockFiles.forEach((file) => {
+      const filePath = path.join(sessionPath, file);
+      if (fs.existsSync(filePath)) {
+        try { fs.unlinkSync(filePath); } catch (e) {}
+      }
+    });
+  }
+
+  if (process.platform === 'linux') {
+    exec('pkill -f chromium || pkill -f puppeteer || true');
+  }
+}
+
+// --- CONFIGURAÇÃO EXPRESS ---
 app.use(cors({
   origin: ['https://snref-fronten-8dbe187fda6c.herokuapp.com'],
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type']
 }));
-
 app.use(express.json());
 
-
+// --- ESTADO DO BOT ---
 let clientInstance = null;
 let isReady = false;
 let isInitializing = false;
-let browserClosed = false;
-let lastInit = 0;
 
-// Handler para finalizar o clientInstance ao encerrar o processo
-async function closeClientInstance() {
-  if (clientInstance && typeof clientInstance.close === 'function') {
-    try {
-      await clientInstance.close();
-      console.log('✅ ClientInstance fechado corretamente.');
-    } catch (e) {
-      console.error('Erro ao fechar clientInstance:', e.message);
-    }
-  }
-}
-
-process.on('SIGINT', async () => {
-  await closeClientInstance();
-  process.exit();
-});
-process.on('SIGTERM', async () => {
-  await closeClientInstance();
-  process.exit();
-});
-
-
+// --- INICIALIZAÇÃO DO WHATSAPP ---
 async function iniciarWPP() {
   if (isInitializing) return;
-  if (Date.now() - lastInit < 10000) return; // evita loops rápidos
   isInitializing = true;
-  lastInit = Date.now();
-  browserClosed = false;
+  isReady = false;
+
+  limparAmbiente();
+
+  console.log('🚀 Iniciando WPPConnect...');
 
   try {
-    const client = await wppconnect.create({
-      session: 'whatsapp-bot',
+    clientInstance = await wppconnect.create({
+      session: sessionName,
       catchQR: (base64Qr, asciiQR) => {
-        console.log('\n--- NOVO QR CODE GERADO ---\n' + asciiQR + '\n---------------------------\n');
+        console.log('\n--- ESCANEIE O QR CODE ---');
+        console.log(asciiQR);
+        console.log('---------------------------\n');
       },
-      statusFind: (statusSession) => console.log('Status da Sessão:', statusSession),
+      statusFind: (statusSession) => {
+        console.log('Status da Sessão:', statusSession);
+        if (statusSession === 'isLogged' || statusSession === 'qrReadSuccess') {
+          isReady = true;
+        }
+      },
       headfull: false,
-        autoClose: 600, // QR permanece aberto por 10 minutos
+      autoClose: 0, // IMPORTANTE: Mantém o navegador aberto aguardando QR Code
       tokenStore: 'file',
       folderNameToken: 'tokens',
       puppeteerOptions: {
-        executablePath: '/usr/bin/chromium-browser',
+        executablePath: '/usr/bin/chromium-browser', // Verifique com 'which chromium-browser'
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
           '--disable-dev-shm-usage',
-          '--single-process',
-          '--no-zygote'
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu'
         ]
       }
     });
 
-    clientInstance = client;
     isReady = true;
     isInitializing = false;
-    console.log('✅ WPPConnect pronto!');
+    console.log('✅ WPPConnect pronto para enviar mensagens!');
 
-    // Reconexão automática em eventos críticos
-    client.onStateChange((state) => {
-      console.log('Estado da conexão:', state);
-      if (
-        state === 'DISCONNECTED' ||
-        state === 'UNPAIRED' ||
-        state === 'CLOSED' ||
-        state === 'CONFLICT' ||
-        state === 'UNLAUNCHED' ||
-        state === 'browserClose' // Corrigido para reiniciar também neste estado
-      ) {
+    // Monitoramento de Conexão
+    clientInstance.onStateChange((state) => {
+      console.log('Mudança de estado:', state);
+      if (['DISCONNECTED', 'REJECTED', 'UNPAIRED'].includes(state)) {
         isReady = false;
-        clientInstance = null;
-        setTimeout(iniciarWPP, 15000);
+        reboot();
       }
-    });
-
-    client.onStreamChange((state) => {
-      console.log('Stream alterado:', state);
-      if (state === 'DISCONNECTED' || state === 'SYNCING') {
-        isReady = false;
-        clientInstance = null;
-        setTimeout(iniciarWPP, 15000);
-      }
-    });
-
-    // Detecta fechamento do navegador
-    if (client && client.page && client.page.browser) {
-      client.page.browser().on('disconnected', () => {
-        console.error('Navegador fechado! Reiniciando bot...');
-        browserClosed = true;
-        isReady = false;
-        clientInstance = null;
-        setTimeout(iniciarWPP, 15000);
-      });
-    }
-
-    // Captura erros não tratados
-    process.on('unhandledRejection', (reason, p) => {
-      console.error('Unhandled Rejection:', reason);
-    });
-    process.on('uncaughtException', (err) => {
-      console.error('Uncaught Exception:', err);
     });
 
   } catch (error) {
-    console.error('Erro na inicialização:', error);
-    isReady = false;
-    clientInstance = null;
+    console.error('❌ Erro fatal na inicialização:', error.message);
     isInitializing = false;
-    setTimeout(iniciarWPP, 20000);
+    setTimeout(iniciarWPP, 30000); // Tenta novamente em 30s se falhar
   }
 }
 
-iniciarWPP();
+function reboot() {
+  console.log('🔄 Reiniciando instância em 15 segundos...');
+  if (clientInstance) clientInstance.close().catch(() => {});
+  clientInstance = null;
+  setTimeout(iniciarWPP, 15000);
+}
 
-
+// --- ENDPOINT DE ENVIO ---
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
 
-  if (!isReady || !clientInstance || browserClosed) {
-    return res.status(503).json({ error: 'Bot não pronto ou sessão fechada' });
+  if (!isReady || !clientInstance) {
+    return res.status(503).json({ 
+      error: 'O bot ainda está carregando ou o QR Code não foi lido.' 
+    });
   }
 
   try {
     const cleanNumber = String(number).replace(/\D/g, '');
     const target = `${cleanNumber}@c.us`;
 
-    console.log(`🚀 Enviando mensagem para: ${target}`);
-
-    // Verifica se a sessão está ativa antes de enviar
-    if (typeof clientInstance.getConnectionState === 'function') {
-      const state = await clientInstance.getConnectionState();
-      if (state !== 'CONNECTED') {
-        throw new Error('Sessão não está conectada');
-      }
-    }
-
     const result = await clientInstance.sendText(target, String(message));
-
-    console.log('✅ Mensagem enviada!');
+    
+    console.log(`✅ Mensagem enviada para ${cleanNumber}`);
     return res.json({ success: true, id: result.id });
 
   } catch (e) {
-    // Se for erro de sessão fechada, reinicia o bot
-    if (e.message && e.message.includes('Session closed')) {
-      isReady = false;
-      clientInstance = null;
-      setTimeout(iniciarWPP, 5000);
-    }
-    console.error('❌ Erro ao enviar mensagem:', e.message);
-    return res.status(500).json({ error: 'Erro ao enviar mensagem', detail: e.message });
+    console.error('❌ Erro no envio:', e.message);
+    return res.status(500).json({ error: 'Falha ao enviar', detail: e.message });
   }
 });
 
+// --- INICIALIZAÇÃO ---
+app.listen(PORT, () => {
+  console.log(`🚀 API rodando na porta ${PORT}`);
+  iniciarWPP();
+});
 
-app.listen(3000, () => console.log(`🚀 API em http://localhost:3000`));
+// Tratamento de encerramento
+process.on('SIGINT', () => {
+  if (clientInstance) clientInstance.close();
+  process.exit();
+});
