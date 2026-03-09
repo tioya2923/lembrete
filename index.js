@@ -29,7 +29,8 @@ function limparAmbiente() {
   }
 
   if (process.platform === 'linux') {
-    exec('pkill -f chromium || pkill -f puppeteer || true');
+    // Tenta matar processos órfãos, mas ignora erros se não houver nenhum
+    try { exec('pkill -f chromium || pkill -f puppeteer || true'); } catch (e) {}
   }
 }
 
@@ -66,16 +67,21 @@ async function iniciarWPP() {
       },
       statusFind: (statusSession) => {
         console.log('Status da Sessão:', statusSession);
+        // Se o navegador fechar ou a sessão cair, disparar reboot
+        if (['browserClose', 'autocloseCalled', 'serverDisconnect'].includes(statusSession)) {
+          isReady = false;
+          reboot();
+        }
         if (statusSession === 'isLogged' || statusSession === 'qrReadSuccess') {
           isReady = true;
         }
       },
       headfull: false,
-      autoClose: 0, // IMPORTANTE: Mantém o navegador aberto aguardando QR Code
+      autoClose: 0, 
       tokenStore: 'file',
       folderNameToken: 'tokens',
       puppeteerOptions: {
-        executablePath: '/usr/bin/chromium-browser', // Verifique com 'which chromium-browser'
+        executablePath: '/usr/bin/chromium-browser', 
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -92,7 +98,7 @@ async function iniciarWPP() {
     isInitializing = false;
     console.log('✅ WPPConnect pronto para enviar mensagens!');
 
-    // Monitoramento de Conexão
+    // Monitoramento de Conexão Ativa
     clientInstance.onStateChange((state) => {
       console.log('Mudança de estado:', state);
       if (['DISCONNECTED', 'REJECTED', 'UNPAIRED'].includes(state)) {
@@ -104,14 +110,21 @@ async function iniciarWPP() {
   } catch (error) {
     console.error('❌ Erro fatal na inicialização:', error.message);
     isInitializing = false;
-    setTimeout(iniciarWPP, 30000); // Tenta novamente em 30s se falhar
+    isReady = false;
+    setTimeout(iniciarWPP, 30000); 
   }
 }
 
 function reboot() {
+  if (isInitializing) return;
   console.log('🔄 Reiniciando instância em 15 segundos...');
-  if (clientInstance) clientInstance.close().catch(() => {});
-  clientInstance = null;
+  isReady = false;
+  
+  if (clientInstance) {
+    clientInstance.close().catch(() => {});
+    clientInstance = null;
+  }
+  
   setTimeout(iniciarWPP, 15000);
 }
 
@@ -119,9 +132,10 @@ function reboot() {
 app.post('/send-message', async (req, res) => {
   const { number, message } = req.body;
 
+  // Verificação de segurança: Se o objeto do cliente não existe ou perdeu conexão
   if (!isReady || !clientInstance) {
     return res.status(503).json({ 
-      error: 'O bot ainda está carregando ou o QR Code não foi lido.' 
+      error: 'O bot não está pronto. Aguarde a reinicialização ou escaneie o QR Code.' 
     });
   }
 
@@ -129,6 +143,7 @@ app.post('/send-message', async (req, res) => {
     const cleanNumber = String(number).replace(/\D/g, '');
     const target = `${cleanNumber}@c.us`;
 
+    // Tenta enviar a mensagem
     const result = await clientInstance.sendText(target, String(message));
     
     console.log(`✅ Mensagem enviada para ${cleanNumber}`);
@@ -136,6 +151,14 @@ app.post('/send-message', async (req, res) => {
 
   } catch (e) {
     console.error('❌ Erro no envio:', e.message);
+
+    // Se o erro for de "Frame Detached" ou similar, forçamos o reboot
+    if (e.message.includes('detached') || e.message.includes('Protocol error')) {
+      isReady = false;
+      reboot();
+      return res.status(500).json({ error: 'Conexão com navegador perdida. Reiniciando bot...' });
+    }
+
     return res.status(500).json({ error: 'Falha ao enviar', detail: e.message });
   }
 });
