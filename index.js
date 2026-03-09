@@ -115,7 +115,14 @@ async function iniciarWPP() {
     // Reconexão automática em eventos críticos
     client.onStateChange((state) => {
       console.log('Estado da conexão:', state);
-      if (state === 'DISCONNECTED' || state === 'UNPAIRED' || state === 'CLOSED' || state === 'CONFLICT' || state === 'UNLAUNCHED') {
+      if (
+        state === 'DISCONNECTED' ||
+        state === 'UNPAIRED' ||
+        state === 'CLOSED' ||
+        state === 'CONFLICT' ||
+        state === 'UNLAUNCHED' ||
+        state === 'browserClose' // Corrigido para reiniciar também neste estado
+      ) {
         isReady = false;
         clientInstance = null;
         setTimeout(iniciarWPP, 15000);
